@@ -1,8 +1,10 @@
 # import datetime
 import time
 
+from s3p_sdk.exceptions.parser import S3PPluginParserOutOfRestrictionException, S3PPluginParserFinish
 from s3p_sdk.plugin.payloads.parsers import S3PParserBase
-from s3p_sdk.types import S3PRefer, S3PDocument, S3PPlugin
+from s3p_sdk.types import S3PRefer, S3PDocument, S3PPlugin, S3PPluginRestrictions
+from s3p_sdk.types.plugin_restrictions import FROM_DATE
 from selenium.common import NoSuchElementException
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
@@ -13,16 +15,16 @@ from datetime import datetime
 
 import dateparser
 
+
 class RetailLoyalty(S3PParserBase):
     """
     A Parser payload that uses S3P Parser base class.
     """
     HOST = 'https://retail-loyalty.org/news/'
     url_template = f'{HOST}/research/index.htm?bis_fsi_publs_page='
-    date_begin = datetime(2019, 1, 1)
-    def __init__(self, refer: S3PRefer, plugin: S3PPlugin, web_driver: WebDriver, max_count_documents: int = None,
-                 last_document: S3PDocument = None):
-        super().__init__(refer, plugin, max_count_documents, last_document)
+
+    def __init__(self, refer: S3PRefer, plugin: S3PPlugin, restrictions: S3PPluginRestrictions, web_driver: WebDriver):
+        super().__init__(refer, plugin, restrictions)
 
         # Тут должны быть инициализированы свойства, характерные для этого парсера. Например: WebDriver
         self._driver = web_driver
@@ -45,8 +47,6 @@ class RetailLoyalty(S3PParserBase):
             links = self._collect_doc_links(url)  # выборка всех ссылок на новости из страницы
             for link in links:
                 self._parse_page(link)
-
-        ...
 
     def _collect_doc_links(self, url) -> list:
         self._initial_access_source(url)
@@ -74,7 +74,7 @@ class RetailLoyalty(S3PParserBase):
             page += 1
             yield url
 
-    def _parse_page(self, url) -> S3PDocument:
+    def _parse_page(self, url):
         self.logger.debug(f'Start parse news at {url}')
 
         try:
@@ -111,7 +111,8 @@ class RetailLoyalty(S3PParserBase):
             _text = WebDriverWait(_article, 2).until(ec.presence_of_element_located((By.ID, 'article'))).text
             doc.text = _text
             try:
-                _abstract = WebDriverWait(_article, 2).until(ec.presence_of_element_located((By.ID, 'news-line-preview'))).text
+                _abstract = WebDriverWait(_article, 2).until(
+                    ec.presence_of_element_located((By.ID, 'news-line-preview'))).text
                 doc.abstract = _abstract
             except:
                 self.logger.debug('There aren\'t a abstract in the article')
@@ -138,7 +139,15 @@ class RetailLoyalty(S3PParserBase):
                 self.logger.debug('There aren\'t a rubrics in the article')
 
             doc.other_data = _others
-            self._find(doc)
+
+            try:
+                self._find(doc)
+            except S3PPluginParserOutOfRestrictionException as e:
+                if e.restriction == FROM_DATE:
+                    self.logger.debug(f'Document is out of date range `{self._restriction.from_date}`')
+                    raise S3PPluginParserFinish(self._plugin,
+                                                f'Document is out of date range `{self._restriction.from_date}`',
+                                                e)
 
     def _initial_access_source(self, url: str, delay: int = 2):
         self._driver.get(url)
